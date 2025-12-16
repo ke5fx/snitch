@@ -1,0 +1,502 @@
+package cmd
+
+import (
+	"encoding/csv"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"os"
+	"os/exec"
+	"snitch/internal/collector"
+	"snitch/internal/color"
+	"snitch/internal/config"
+	"snitch/internal/resolver"
+	"strconv"
+	"strings"
+	"text/tabwriter"
+
+	"github.com/charmbracelet/lipgloss"
+	"github.com/spf13/cobra"
+	"github.com/tidwall/pretty"
+	"golang.org/x/term"
+)
+
+var (
+	outputFormat  string
+	noHeaders     bool
+	showTimestamp bool
+	sortBy        string
+	fields        string
+	ipv4          bool
+	ipv6          bool
+	colorMode     string
+	numeric       bool
+	lsTCP         bool
+	lsUDP         bool
+	lsListen      bool
+	lsEstab       bool
+	plainOutput   bool
+)
+
+var lsCmd = &cobra.Command{
+	Use:   "ls [filters...]",
+	Short: "One-shot listing of connections",
+	Long: `One-shot listing of connections.
+
+Filters are specified in key=value format. For example:
+  snitch ls proto=tcp state=established
+
+Available filters:
+  proto, state, pid, proc, lport, rport, user, laddr, raddr, contains, if, mark, namespace, inode, since
+`,
+	Run: func(cmd *cobra.Command, args []string) {
+		runListCommand(outputFormat, args)
+	},
+}
+
+func runListCommand(outputFormat string, args []string) {
+	color.Init(colorMode)
+
+	filters, err := parseFilters(args)
+	if err != nil {
+		log.Fatalf("Error parsing filters: %v", err)
+	}
+	filters.IPv4 = ipv4
+	filters.IPv6 = ipv6
+
+	// apply shortcut flags
+	if lsTCP && !lsUDP {
+		filters.Proto = "tcp"
+	} else if lsUDP && !lsTCP {
+		filters.Proto = "udp"
+	}
+	if lsListen && !lsEstab {
+		filters.State = "LISTEN"
+	} else if lsEstab && !lsListen {
+		filters.State = "ESTABLISHED"
+	}
+
+	connections, err := collector.GetConnections()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	filteredConnections := collector.FilterConnections(connections, filters)
+
+	if sortBy != "" {
+		collector.SortConnections(filteredConnections, collector.ParseSortOptions(sortBy))
+	} else {
+		// default sort by local port
+		collector.SortConnections(filteredConnections, collector.SortOptions{
+			Field:     collector.SortByLport,
+			Direction: collector.SortAsc,
+		})
+	}
+
+	selectedFields := []string{}
+	if fields != "" {
+		selectedFields = strings.Split(fields, ",")
+	}
+
+	switch outputFormat {
+	case "json":
+		printJSON(filteredConnections)
+	case "csv":
+		printCSV(filteredConnections, !noHeaders, showTimestamp, selectedFields)
+	case "table", "wide":
+		if plainOutput {
+			printPlainTable(filteredConnections, !noHeaders, showTimestamp, selectedFields)
+		} else {
+			printStyledTable(filteredConnections, !noHeaders, selectedFields)
+		}
+	default:
+		log.Fatalf("Invalid output format: %s. Valid formats are: table, wide, json, csv", outputFormat)
+	}
+}
+
+func parseFilters(args []string) (collector.FilterOptions, error) {
+	filters := collector.FilterOptions{}
+	for _, arg := range args {
+		parts := strings.SplitN(arg, "=", 2)
+		if len(parts) != 2 {
+			return filters, fmt.Errorf("invalid filter format: %s", arg)
+		}
+		key, value := parts[0], parts[1]
+		switch strings.ToLower(key) {
+		case "proto":
+			filters.Proto = value
+		case "state":
+			filters.State = value
+		case "pid":
+			pid, err := strconv.Atoi(value)
+			if err != nil {
+				return filters, fmt.Errorf("invalid pid value: %s", value)
+			}
+			filters.Pid = pid
+		case "proc":
+			filters.Proc = value
+		case "lport":
+			port, err := strconv.Atoi(value)
+			if err != nil {
+				return filters, fmt.Errorf("invalid lport value: %s", value)
+			}
+			filters.Lport = port
+		case "rport":
+			port, err := strconv.Atoi(value)
+			if err != nil {
+				return filters, fmt.Errorf("invalid rport value: %s", value)
+			}
+			filters.Rport = port
+		case "user":
+			uid, err := strconv.Atoi(value)
+			if err == nil {
+				filters.UID = uid
+			} else {
+				filters.User = value
+			}
+		case "laddr":
+			filters.Laddr = value
+		case "raddr":
+			filters.Raddr = value
+		case "contains":
+			filters.Contains = value
+		case "if", "interface":
+			filters.Interface = value
+		case "mark":
+			filters.Mark = value
+		case "namespace":
+			filters.Namespace = value
+		case "inode":
+			inode, err := strconv.ParseInt(value, 10, 64)
+			if err != nil {
+				return filters, fmt.Errorf("invalid inode value: %s", value)
+			}
+			filters.Inode = inode
+		case "since":
+			since, sinceRel, err := collector.ParseTimeFilter(value)
+			if err != nil {
+				return filters, fmt.Errorf("invalid since value: %s", value)
+			}
+			filters.Since = since
+			filters.SinceRel = sinceRel
+		default:
+			return filters, fmt.Errorf("unknown filter key: %s", key)
+		}
+	}
+	return filters, nil
+}
+
+func getFieldMap(c collector.Connection) map[string]string {
+	laddr := c.Laddr
+	raddr := c.Raddr
+	lport := strconv.Itoa(c.Lport)
+	rport := strconv.Itoa(c.Rport)
+	
+	// Apply name resolution if not in numeric mode
+	if !numeric {
+		if resolvedLaddr := resolver.ResolveAddr(c.Laddr); resolvedLaddr != c.Laddr {
+			laddr = resolvedLaddr
+		}
+		if resolvedRaddr := resolver.ResolveAddr(c.Raddr); resolvedRaddr != c.Raddr && c.Raddr != "*" && c.Raddr != "" {
+			raddr = resolvedRaddr
+		}
+		if resolvedLport := resolver.ResolvePort(c.Lport, c.Proto); resolvedLport != strconv.Itoa(c.Lport) {
+			lport = resolvedLport
+		}
+		if resolvedRport := resolver.ResolvePort(c.Rport, c.Proto); resolvedRport != strconv.Itoa(c.Rport) && c.Rport != 0 {
+			rport = resolvedRport
+		}
+	}
+	
+	return map[string]string{
+		"pid":       strconv.Itoa(c.PID),
+		"process":   c.Process,
+		"user":      c.User,
+		"uid":       strconv.Itoa(c.UID),
+		"proto":     c.Proto,
+		"ipversion": c.IPVersion,
+		"state":     c.State,
+		"laddr":     laddr,
+		"lport":     lport,
+		"raddr":     raddr,
+		"rport":     rport,
+		"if":        c.Interface,
+		"rx_bytes":  strconv.FormatInt(c.RxBytes, 10),
+		"tx_bytes":  strconv.FormatInt(c.TxBytes, 10),
+		"rtt_ms":    strconv.FormatFloat(c.RttMs, 'f', 1, 64),
+		"mark":      c.Mark,
+		"namespace": c.Namespace,
+		"inode":     strconv.FormatInt(c.Inode, 10),
+		"ts":        c.TS.Format("2006-01-02T15:04:05.000Z07:00"),
+	}
+}
+
+func printJSON(conns []collector.Connection) {
+	jsonOutput, err := json.MarshalIndent(conns, "", "  ")
+	if err != nil {
+		log.Fatalf("Error marshaling to JSON: %v", err)
+	}
+
+	if color.IsColorDisabled() {
+		fmt.Println(string(jsonOutput))
+	} else {
+		colored := pretty.Color(jsonOutput, nil)
+		fmt.Println(string(colored))
+	}
+}
+
+func printCSV(conns []collector.Connection, headers bool, timestamp bool, selectedFields []string) {
+	writer := csv.NewWriter(os.Stdout)
+	defer writer.Flush()
+
+	if len(selectedFields) == 0 {
+		selectedFields = []string{"pid", "process", "user", "uid", "proto", "state", "laddr", "lport", "raddr", "rport"}
+		if timestamp {
+			selectedFields = append([]string{"ts"}, selectedFields...)
+		}
+	}
+
+	if headers {
+		headerRow := []string{}
+		for _, field := range selectedFields {
+			headerRow = append(headerRow, strings.ToUpper(field))
+		}
+		_ = writer.Write(headerRow)
+	}
+
+	for _, conn := range conns {
+		fieldMap := getFieldMap(conn)
+		row := []string{}
+		for _, field := range selectedFields {
+			row = append(row, fieldMap[field])
+		}
+		_ = writer.Write(row)
+	}
+}
+
+func printPlainTable(conns []collector.Connection, headers bool, timestamp bool, selectedFields []string) {
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+	defer w.Flush()
+
+	if len(selectedFields) == 0 {
+		selectedFields = []string{"pid", "process", "user", "proto", "state", "laddr", "lport", "raddr", "rport"}
+		if timestamp {
+			selectedFields = append([]string{"ts"}, selectedFields...)
+		}
+	}
+
+	if headers {
+		headerRow := []string{}
+		for _, field := range selectedFields {
+			headerRow = append(headerRow, strings.ToUpper(field))
+		}
+		fmt.Fprintln(w, strings.Join(headerRow, "\t"))
+	}
+
+	for _, conn := range conns {
+		fieldMap := getFieldMap(conn)
+		row := []string{}
+		for _, field := range selectedFields {
+			row = append(row, fieldMap[field])
+		}
+		fmt.Fprintln(w, strings.Join(row, "\t"))
+	}
+}
+
+func printStyledTable(conns []collector.Connection, headers bool, selectedFields []string) {
+	if len(selectedFields) == 0 {
+		selectedFields = []string{"process", "pid", "proto", "state", "laddr", "lport", "raddr", "rport"}
+	}
+
+	// calculate column widths
+	widths := make(map[string]int)
+	for _, f := range selectedFields {
+		widths[f] = len(strings.ToUpper(f))
+	}
+
+	for _, conn := range conns {
+		fm := getFieldMap(conn)
+		for _, f := range selectedFields {
+			if len(fm[f]) > widths[f] {
+				widths[f] = len(fm[f])
+			}
+		}
+	}
+
+	// cap and pad widths
+	for f := range widths {
+		if widths[f] > 25 {
+			widths[f] = 25
+		}
+		widths[f] += 2 // padding
+	}
+
+	// build output
+	var output strings.Builder
+
+	// styles
+	borderStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("240"))
+	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15"))
+	processStyle := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15"))
+	faintStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+
+	// build top border
+	output.WriteString("\n")
+	output.WriteString(borderStyle.Render("  ╭"))
+	for i, f := range selectedFields {
+		if i > 0 {
+			output.WriteString(borderStyle.Render("┬"))
+		}
+		output.WriteString(borderStyle.Render(strings.Repeat("─", widths[f])))
+	}
+	output.WriteString(borderStyle.Render("╮"))
+	output.WriteString("\n")
+
+	// header row
+	if headers {
+		output.WriteString(borderStyle.Render("  │"))
+		for i, f := range selectedFields {
+			if i > 0 {
+				output.WriteString(borderStyle.Render("│"))
+			}
+			cell := fmt.Sprintf(" %-*s", widths[f]-1, strings.ToUpper(f))
+			output.WriteString(headerStyle.Render(cell))
+		}
+		output.WriteString(borderStyle.Render("│"))
+		output.WriteString("\n")
+
+		// header separator
+		output.WriteString(borderStyle.Render("  ├"))
+		for i, f := range selectedFields {
+			if i > 0 {
+				output.WriteString(borderStyle.Render("┼"))
+			}
+			output.WriteString(borderStyle.Render(strings.Repeat("─", widths[f])))
+		}
+		output.WriteString(borderStyle.Render("┤"))
+		output.WriteString("\n")
+	}
+
+	// data rows
+	for _, conn := range conns {
+		fm := getFieldMap(conn)
+		output.WriteString(borderStyle.Render("  │"))
+		for i, f := range selectedFields {
+			if i > 0 {
+				output.WriteString(borderStyle.Render("│"))
+			}
+			val := fm[f]
+			maxW := widths[f] - 2
+			if len(val) > maxW {
+				val = val[:maxW-1] + "…"
+			}
+			cell := fmt.Sprintf(" %-*s ", maxW, val)
+
+			switch f {
+			case "proto":
+				c := lipgloss.Color("37") // cyan
+				if strings.Contains(fm["proto"], "udp") {
+					c = lipgloss.Color("135") // purple
+				}
+				output.WriteString(lipgloss.NewStyle().Foreground(c).Render(cell))
+			case "state":
+				c := lipgloss.Color("245") // gray
+				switch strings.ToUpper(fm["state"]) {
+				case "LISTEN":
+					c = lipgloss.Color("35") // green
+				case "ESTABLISHED":
+					c = lipgloss.Color("33") // blue
+				case "TIME_WAIT", "CLOSE_WAIT":
+					c = lipgloss.Color("178") // yellow
+				}
+				output.WriteString(lipgloss.NewStyle().Foreground(c).Render(cell))
+			case "process":
+				output.WriteString(processStyle.Render(cell))
+			default:
+				output.WriteString(cell)
+			}
+		}
+		output.WriteString(borderStyle.Render("│"))
+		output.WriteString("\n")
+	}
+
+	// bottom border
+	output.WriteString(borderStyle.Render("  ╰"))
+	for i, f := range selectedFields {
+		if i > 0 {
+			output.WriteString(borderStyle.Render("┴"))
+		}
+		output.WriteString(borderStyle.Render(strings.Repeat("─", widths[f])))
+	}
+	output.WriteString(borderStyle.Render("╯"))
+	output.WriteString("\n")
+
+	// summary
+	output.WriteString(faintStyle.Render(fmt.Sprintf("  %d connections\n", len(conns))))
+	output.WriteString("\n")
+
+	// output with pager if needed
+	printWithPager(output.String())
+}
+
+func printWithPager(content string) {
+	lines := strings.Count(content, "\n")
+
+	// check if stdout is a terminal and content is long
+	if term.IsTerminal(int(os.Stdout.Fd())) {
+		_, height, err := term.GetSize(int(os.Stdout.Fd()))
+		if err == nil && lines > height-2 {
+			// use pager
+			pager := os.Getenv("PAGER")
+			if pager == "" {
+				pager = "less"
+			}
+
+			cmd := exec.Command(pager, "-R") // -R for color support
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+
+			stdin, err := cmd.StdinPipe()
+			if err != nil {
+				fmt.Print(content)
+				return
+			}
+
+			if err := cmd.Start(); err != nil {
+				fmt.Print(content)
+				return
+			}
+
+			_, _ = io.WriteString(stdin, content)
+			_ = stdin.Close()
+			_ = cmd.Wait()
+			return
+		}
+	}
+
+	fmt.Print(content)
+}
+
+func init() {
+	rootCmd.AddCommand(lsCmd)
+
+	cfg := config.Get()
+
+	lsCmd.Flags().StringVarP(&outputFormat, "output", "o", cfg.Defaults.OutputFormat, "Output format (table, wide, json, csv)")
+	lsCmd.Flags().BoolVar(&noHeaders, "no-headers", cfg.Defaults.NoHeaders, "Omit headers for table/csv output")
+	lsCmd.Flags().BoolVar(&showTimestamp, "ts", false, "Include timestamp in output")
+	lsCmd.Flags().StringVarP(&sortBy, "sort", "s", cfg.Defaults.SortBy, "Sort by column (e.g., pid:desc)")
+	lsCmd.Flags().StringVarP(&fields, "fields", "f", strings.Join(cfg.Defaults.Fields, ","), "Comma-separated list of fields to show")
+	lsCmd.Flags().BoolVarP(&ipv4, "ipv4", "4", cfg.Defaults.IPv4, "Only show IPv4 connections")
+	lsCmd.Flags().BoolVarP(&ipv6, "ipv6", "6", cfg.Defaults.IPv6, "Only show IPv6 connections")
+	lsCmd.Flags().StringVar(&colorMode, "color", cfg.Defaults.Color, "Color mode (auto, always, never)")
+	lsCmd.Flags().BoolVarP(&numeric, "numeric", "n", cfg.Defaults.Numeric, "Don't resolve hostnames")
+
+	// shortcut filters
+	lsCmd.Flags().BoolVarP(&lsTCP, "tcp", "t", false, "Show only TCP connections")
+	lsCmd.Flags().BoolVarP(&lsUDP, "udp", "u", false, "Show only UDP connections")
+	lsCmd.Flags().BoolVarP(&lsListen, "listen", "l", false, "Show only listening sockets")
+	lsCmd.Flags().BoolVarP(&lsEstab, "established", "e", false, "Show only established connections")
+	lsCmd.Flags().BoolVarP(&plainOutput, "plain", "p", false, "Plain output (parsable, no styling)")
+}

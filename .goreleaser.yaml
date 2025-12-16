@@ -1,0 +1,83 @@
+version: 2
+
+project_name: snitch
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - "7"
+    ldflags:
+      - -s -w
+      - -X snitch/cmd.Version={{.Version}}
+      - -X snitch/cmd.Commit={{.ShortCommit}}
+      - -X snitch/cmd.Date={{.Date}}
+
+archives:
+  - formats:
+      - tar.gz
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- .Arch }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
+      - Merge pull request
+      - Merge branch
+
+nfpms:
+  - id: packages
+    package_name: snitch
+    vendor: karol broda
+    homepage: https://github.com/karol-broda/snitch
+    maintainer: karol broda
+    description: a friendlier ss/netstat for humans
+    license: MIT
+    formats:
+      - deb
+      - rpm
+      - apk
+
+brews:
+  - repository:
+      owner: karol-broda
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    skip_upload: auto
+    homepage: https://github.com/karol-broda/snitch
+    description: a friendlier ss/netstat for humans
+    license: MIT
+    install: |
+      bin.install "snitch"
+    test: |
+      system "#{bin}/snitch", "--version"
+
+release:
+  github:
+    owner: karol-broda
+    name: snitch
+  draft: false
+  prerelease: auto
+
