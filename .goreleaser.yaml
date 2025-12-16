@@ -74,7 +74,7 @@ nfpms:
       - deb
       - rpm
       - apk
-    builds:
+    ids:
       - linux
 
 release:

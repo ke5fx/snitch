@@ -7,6 +7,7 @@ package collector
 #include <sys/proc_info.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp_fsm.h>
 #include <arpa/inet.h>
 #include <pwd.h>
 #include <stdlib.h>
@@ -15,11 +16,6 @@ package collector
 // get process name by pid
 static int get_proc_name(int pid, char *name, int namelen) {
     return proc_name(pid, name, namelen);
-}
-
-// get process path by pid
-static int get_proc_path(int pid, char *path, int pathlen) {
-    return proc_pidpath(pid, path, pathlen);
 }
 
 // get uid for a process
@@ -33,12 +29,74 @@ static int get_proc_uid(int pid) {
 }
 
 // get username from uid
-static char* get_username(int uid) {
+static const char* get_username(int uid) {
     struct passwd *pw = getpwuid(uid);
     if (pw == NULL) {
         return NULL;
     }
     return pw->pw_name;
+}
+
+// socket info extraction - handles the union properly in C
+typedef struct {
+    int family;
+    int sock_type;
+    int protocol;
+    int state;
+    uint32_t laddr4;
+    uint32_t raddr4;
+    uint8_t laddr6[16];
+    uint8_t raddr6[16];
+    int lport;
+    int rport;
+} socket_info_t;
+
+static int get_socket_info(int pid, int fd, socket_info_t *info) {
+    struct socket_fdinfo si;
+    int ret = proc_pidfdinfo(pid, fd, PROC_PIDFDSOCKETINFO, &si, sizeof(si));
+    if (ret <= 0) {
+        return -1;
+    }
+
+    info->family = si.psi.soi_family;
+    info->sock_type = si.psi.soi_type;
+    info->protocol = si.psi.soi_protocol;
+
+    if (info->family == AF_INET) {
+        if (info->sock_type == SOCK_STREAM) {
+            // TCP
+            info->state = si.psi.soi_proto.pri_tcp.tcpsi_state;
+            info->laddr4 = si.psi.soi_proto.pri_tcp.tcpsi_ini.insi_laddr.ina_46.i46a_addr4.s_addr;
+            info->raddr4 = si.psi.soi_proto.pri_tcp.tcpsi_ini.insi_faddr.ina_46.i46a_addr4.s_addr;
+            info->lport = ntohs(si.psi.soi_proto.pri_tcp.tcpsi_ini.insi_lport);
+            info->rport = ntohs(si.psi.soi_proto.pri_tcp.tcpsi_ini.insi_fport);
+        } else if (info->sock_type == SOCK_DGRAM) {
+            // UDP
+            info->state = 0;
+            info->laddr4 = si.psi.soi_proto.pri_in.insi_laddr.ina_46.i46a_addr4.s_addr;
+            info->raddr4 = si.psi.soi_proto.pri_in.insi_faddr.ina_46.i46a_addr4.s_addr;
+            info->lport = ntohs(si.psi.soi_proto.pri_in.insi_lport);
+            info->rport = ntohs(si.psi.soi_proto.pri_in.insi_fport);
+        }
+    } else if (info->family == AF_INET6) {
+        if (info->sock_type == SOCK_STREAM) {
+            // TCP6
+            info->state = si.psi.soi_proto.pri_tcp.tcpsi_state;
+            memcpy(info->laddr6, &si.psi.soi_proto.pri_tcp.tcpsi_ini.insi_laddr.ina_6, 16);
+            memcpy(info->raddr6, &si.psi.soi_proto.pri_tcp.tcpsi_ini.insi_faddr.ina_6, 16);
+            info->lport = ntohs(si.psi.soi_proto.pri_tcp.tcpsi_ini.insi_lport);
+            info->rport = ntohs(si.psi.soi_proto.pri_tcp.tcpsi_ini.insi_fport);
+        } else if (info->sock_type == SOCK_DGRAM) {
+            // UDP6
+            info->state = 0;
+            memcpy(info->laddr6, &si.psi.soi_proto.pri_in.insi_laddr.ina_6, 16);
+            memcpy(info->raddr6, &si.psi.soi_proto.pri_in.insi_faddr.ina_6, 16);
+            info->lport = ntohs(si.psi.soi_proto.pri_in.insi_lport);
+            info->rport = ntohs(si.psi.soi_proto.pri_in.insi_fport);
+        }
+    }
+
+    return 0;
 }
 */
 import "C"
@@ -74,23 +132,20 @@ func (dc *DefaultCollector) GetConnections() ([]Connection, error) {
 	return connections, nil
 }
 
-// GetAllConnections returns network connections (Unix sockets not easily available via libproc)
+// GetAllConnections returns network connections
 func GetAllConnections() ([]Connection, error) {
 	return GetConnections()
 }
 
 func listAllPids() ([]int, error) {
-	// first call to get buffer size needed
 	numPids := C.proc_listpids(C.PROC_ALL_PIDS, 0, nil, 0)
 	if numPids <= 0 {
 		return nil, fmt.Errorf("proc_listpids failed")
 	}
 
-	// allocate buffer
 	bufSize := C.int(numPids) * C.int(unsafe.Sizeof(C.int(0)))
 	buf := make([]C.int, numPids)
 
-	// get actual pids
 	numPids = C.proc_listpids(C.PROC_ALL_PIDS, 0, unsafe.Pointer(&buf[0]), bufSize)
 	if numPids <= 0 {
 		return nil, fmt.Errorf("proc_listpids failed")
@@ -108,7 +163,6 @@ func listAllPids() ([]int, error) {
 }
 
 func getConnectionsForPid(pid int) ([]Connection, error) {
-	// get process info first
 	procName := getProcessName(pid)
 	uid := int(C.get_proc_uid(C.int(pid)))
 	user := ""
@@ -121,7 +175,6 @@ func getConnectionsForPid(pid int) ([]Connection, error) {
 		}
 	}
 
-	// get file descriptors for this process
 	bufSize := C.proc_pidinfo(C.int(pid), C.PROC_PIDLISTFDS, 0, nil, 0)
 	if bufSize <= 0 {
 		return nil, fmt.Errorf("failed to get fd list size")
@@ -141,7 +194,6 @@ func getConnectionsForPid(pid int) ([]Connection, error) {
 	for i := 0; i < numFds; i++ {
 		fdInfo := (*C.struct_proc_fdinfo)(unsafe.Pointer(&buf[i*fdInfoSize]))
 
-		// only interested in sockets
 		if fdInfo.proc_fdtype != C.PROX_FDTYPE_SOCKET {
 			continue
 		}
@@ -156,72 +208,49 @@ func getConnectionsForPid(pid int) ([]Connection, error) {
 }
 
 func getSocketInfo(pid, fd int, procName string, uid int, user string) (Connection, bool) {
-	var socketInfo C.struct_socket_fdinfo
+	var info C.socket_info_t
 
-	ret := C.proc_pidfdinfo(
-		C.int(pid),
-		C.int(fd),
-		C.PROC_PIDFDSOCKETINFO,
-		unsafe.Pointer(&socketInfo),
-		C.int(unsafe.Sizeof(socketInfo)),
-	)
-
-	if ret <= 0 {
+	ret := C.get_socket_info(C.int(pid), C.int(fd), &info)
+	if ret != 0 {
 		return Connection{}, false
 	}
 
-	// check socket family - only interested in IPv4 and IPv6
-	family := socketInfo.psi.soi_family
-	if family != C.AF_INET && family != C.AF_INET6 {
+	// only interested in IPv4 and IPv6
+	if info.family != C.AF_INET && info.family != C.AF_INET6 {
 		return Connection{}, false
 	}
 
-	// check socket type - only TCP and UDP
-	sockType := socketInfo.psi.soi_type
-	if sockType != C.SOCK_STREAM && sockType != C.SOCK_DGRAM {
+	// only TCP and UDP
+	if info.sock_type != C.SOCK_STREAM && info.sock_type != C.SOCK_DGRAM {
 		return Connection{}, false
 	}
 
 	proto := "tcp"
-	if sockType == C.SOCK_DGRAM {
+	if info.sock_type == C.SOCK_DGRAM {
 		proto = "udp"
 	}
 
 	ipVersion := "IPv4"
-	if family == C.AF_INET6 {
+	if info.family == C.AF_INET6 {
 		ipVersion = "IPv6"
 		proto = proto + "6"
 	}
 
 	var laddr, raddr string
-	var lport, rport int
-	var state string
 
-	if family == C.AF_INET {
-		// IPv4
-		insi := socketInfo.psi.soi_proto.pri_tcp.tcpsi_ini
-		laddr = ipv4ToString(insi.insi_laddr.ina_46.i46a_addr4.s_addr)
-		raddr = ipv4ToString(insi.insi_faddr.ina_46.i46a_addr4.s_addr)
-		lport = int(ntohs(insi.insi_lport))
-		rport = int(ntohs(insi.insi_fport))
-
-		if sockType == C.SOCK_STREAM {
-			state = tcpStateToString(int(socketInfo.psi.soi_proto.pri_tcp.tcpsi_state))
-		}
+	if info.family == C.AF_INET {
+		laddr = ipv4ToString(uint32(info.laddr4))
+		raddr = ipv4ToString(uint32(info.raddr4))
 	} else {
-		// IPv6
-		insi := socketInfo.psi.soi_proto.pri_tcp.tcpsi_ini
-		laddr = ipv6ToString(insi.insi_laddr.ina_6)
-		raddr = ipv6ToString(insi.insi_faddr.ina_6)
-		lport = int(ntohs(insi.insi_lport))
-		rport = int(ntohs(insi.insi_fport))
-
-		if sockType == C.SOCK_STREAM {
-			state = tcpStateToString(int(socketInfo.psi.soi_proto.pri_tcp.tcpsi_state))
-		}
+		laddr = ipv6ToString(info.laddr6)
+		raddr = ipv6ToString(info.raddr6)
 	}
 
-	// normalize wildcard addresses
+	state := ""
+	if info.sock_type == C.SOCK_STREAM {
+		state = tcpStateToString(int(info.state))
+	}
+
 	if laddr == "0.0.0.0" || laddr == "::" {
 		laddr = "*"
 	}
@@ -235,9 +264,9 @@ func getSocketInfo(pid, fd int, procName string, uid int, user string) (Connecti
 		IPVersion: ipVersion,
 		State:     state,
 		Laddr:     laddr,
-		Lport:     lport,
+		Lport:     int(info.lport),
 		Raddr:     raddr,
-		Rport:     rport,
+		Rport:     int(info.rport),
 		PID:       pid,
 		Process:   procName,
 		UID:       uid,
@@ -257,7 +286,7 @@ func getProcessName(pid int) string {
 	return C.GoString(&name[0])
 }
 
-func ipv4ToString(addr C.in_addr_t) string {
+func ipv4ToString(addr uint32) string {
 	ip := make(net.IP, 4)
 	ip[0] = byte(addr)
 	ip[1] = byte(addr >> 8)
@@ -266,13 +295,12 @@ func ipv4ToString(addr C.in_addr_t) string {
 	return ip.String()
 }
 
-func ipv6ToString(addr C.struct_in6_addr) string {
+func ipv6ToString(addr [16]C.uint8_t) string {
 	ip := make(net.IP, 16)
 	for i := 0; i < 16; i++ {
-		ip[i] = byte(addr.__u6_addr.__u6_addr8[i])
+		ip[i] = byte(addr[i])
 	}
 
-	// check for IPv4-mapped IPv6 addresses
 	if ip.To4() != nil {
 		return ip.To4().String()
 	}
@@ -280,11 +308,8 @@ func ipv6ToString(addr C.struct_in6_addr) string {
 	return ip.String()
 }
 
-func ntohs(port C.int) uint16 {
-	return uint16((port&0xff)<<8 | (port>>8)&0xff)
-}
-
 func tcpStateToString(state int) string {
+	// macOS TCP states from netinet/tcp_fsm.h
 	states := map[int]string{
 		0:  "CLOSED",
 		1:  "LISTEN",
