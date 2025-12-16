@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  goreleaser:
+  build-linux:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,11 +20,74 @@ jobs:
         with:
           go-version: "1.25.0"
 
-      - name: run goreleaser
+      - name: build linux binaries
         uses: goreleaser/goreleaser-action@v6
         with:
           version: "~> v2"
-          args: release --clean
+          args: build --clean --id linux
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: upload linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-dist
+          path: dist/
+
+  build-darwin:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.0"
+
+      - name: build darwin binaries
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: build --clean --id darwin
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: upload darwin artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: darwin-dist
+          path: dist/
+
+  release:
+    needs: [build-linux, build-darwin]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.0"
+
+      - name: download linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-dist
+          path: dist/
+
+      - name: download darwin artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: darwin-dist
+          path: dist/
+          merge-multiple: true
+
+      - name: release
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean --skip=build
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
