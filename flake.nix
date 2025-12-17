@@ -64,7 +64,7 @@
             pname = "snitch";
             version = self.shortRev or self.dirtyShortRev or "dev";
             src = self;
-            vendorHash = "sha256-BNNbA72puV0QSLkAlgn/buJJt7mIlVkbTEBhTXOg8pY=";
+            vendorHash = "sha256-fX3wOqeOgjH7AuWGxPQxJ+wbhp240CW8tiF4rVUUDzk=";
             env.CGO_ENABLED = 0;
             ldflags = [
               "-s" "-w"

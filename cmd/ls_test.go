@@ -251,7 +251,7 @@ func TestParseFilters(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			filters, err := parseFilters(tt.args)
+			filters, err := ParseFilterArgs(tt.args)
 
 			if tt.expectError {
 				if err == nil {

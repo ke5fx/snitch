@@ -361,8 +361,8 @@ func resetGlobalFlags() {
 	showTimestamp = false
 	sortBy = ""
 	fields = ""
-	ipv4 = false
-	ipv6 = false
+	filterIPv4 = false
+	filterIPv6 = false
 	colorMode = "auto"
 	numeric = false
 }

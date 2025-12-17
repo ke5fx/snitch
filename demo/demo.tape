@@ -1,6 +1,3 @@
-# VHS tape file for snitch demo
-# run with: docker build -f demo/Dockerfile -t snitch-demo . && docker run -v $(pwd)/demo:/output snitch-demo
-
 Output demo.gif
 
 Set Shell "bash"
@@ -11,7 +8,8 @@ Set Height 700
 Set Theme "Catppuccin Frappe"
 Set Padding 15
 Set Framerate 24
-Set TypingSpeed 40ms
+Set TypingSpeed 30ms
+Set PlaybackSpeed 1.5
 
 # force color output
 Env TERM "xterm-256color"
@@ -23,77 +21,74 @@ Env FORCE_COLOR "1"
 # launch snitch
 Type "./snitch top"
 Enter
-Sleep 2s
+Sleep 1.5s
 
 # navigate down through connections
 Down
-Sleep 400ms
+Sleep 200ms
 Down
-Sleep 400ms
+Sleep 200ms
 Down
-Sleep 400ms
+Sleep 200ms
 Down
-Sleep 400ms
+Sleep 200ms
 Down
-Sleep 1s
+Sleep 600ms
 
 # open detail view for selected connection
 Enter
-Sleep 2s
+Sleep 1.5s
 
 # close detail view
 Escape
-Sleep 1s
+Sleep 500ms
 
 # search for nginx
 Type "/"
-Sleep 500ms
+Sleep 300ms
 Type "nginx"
-Sleep 1s
+Sleep 600ms
 Enter
-Sleep 2s
+Sleep 1.2s
 
 # clear search
 Type "/"
-Sleep 300ms
+Sleep 200ms
 Escape
-Sleep 1s
+Sleep 500ms
 
 # filter: hide udp, show only tcp
 Type "u"
-Sleep 1.5s
+Sleep 800ms
 
 # show only listening connections
 Type "e"
-Sleep 1.5s
+Sleep 800ms
 Type "o"
-Sleep 1.5s
+Sleep 800ms
 
 # reset to show all
 Type "a"
-Sleep 1.5s
+Sleep 800ms
 
 # cycle through sort options
 Type "s"
-Sleep 1s
+Sleep 500ms
 Type "s"
-Sleep 1s
-Type "s"
-Sleep 1s
+Sleep 500ms
 
 # reverse sort order
 Type "S"
-Sleep 1.5s
+Sleep 800ms
 
 # show help screen
 Type "?"
-Sleep 3s
+Sleep 2s
 
 # close help
 Escape
-Sleep 1s
+Sleep 500ms
 
 # quit
 Type "q"
-Sleep 300ms
-
+Sleep 200ms

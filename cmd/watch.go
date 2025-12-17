@@ -7,7 +7,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"snitch/internal/collector"
 	"syscall"
 	"time"
 
@@ -36,17 +35,14 @@ Available filters:
 }
 
 func runWatchCommand(args []string) {
-	filters, err := parseFilters(args)
+	filters, err := BuildFilters(args)
 	if err != nil {
 		log.Fatalf("Error parsing filters: %v", err)
 	}
-	filters.IPv4 = ipv4
-	filters.IPv6 = ipv6
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Handle interrupts gracefully
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 	go func() {
@@ -63,18 +59,16 @@ func runWatchCommand(args []string) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			connections, err := collector.GetConnections()
+			connections, err := FetchConnections(filters)
 			if err != nil {
 				log.Printf("Error getting connections: %v", err)
 				continue
 			}
 
-			filteredConnections := collector.FilterConnections(connections, filters)
-			
 			frame := map[string]interface{}{
 				"timestamp":   time.Now().Format(time.RFC3339Nano),
-				"connections": filteredConnections,
-				"count":       len(filteredConnections),
+				"connections": connections,
+				"count":       len(connections),
 			}
 
 			jsonOutput, err := json.Marshal(frame)
@@ -95,8 +89,11 @@ func runWatchCommand(args []string) {
 
 func init() {
 	rootCmd.AddCommand(watchCmd)
+
+	// watch-specific flags
 	watchCmd.Flags().DurationVarP(&watchInterval, "interval", "i", time.Second, "Refresh interval (e.g., 500ms, 2s)")
 	watchCmd.Flags().IntVarP(&watchCount, "count", "c", 0, "Number of frames to emit (0 = unlimited)")
-	watchCmd.Flags().BoolVarP(&ipv4, "ipv4", "4", false, "Only show IPv4 connections")
-	watchCmd.Flags().BoolVarP(&ipv6, "ipv6", "6", false, "Only show IPv6 connections")
+
+	// shared filter flags
+	addFilterFlags(watchCmd)
 }

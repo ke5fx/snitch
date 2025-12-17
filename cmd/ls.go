@@ -22,20 +22,15 @@ import (
 	"golang.org/x/term"
 )
 
+// ls-specific flags
 var (
 	outputFormat  string
 	noHeaders     bool
 	showTimestamp bool
 	sortBy        string
 	fields        string
-	ipv4          bool
-	ipv6          bool
 	colorMode     string
 	numeric       bool
-	lsTCP         bool
-	lsUDP         bool
-	lsListen      bool
-	lsEstab       bool
 	plainOutput   bool
 )
 
@@ -56,39 +51,16 @@ Available filters:
 }
 
 func runListCommand(outputFormat string, args []string) {
-	color.Init(colorMode)
-
-	filters, err := parseFilters(args)
-	if err != nil {
-		log.Fatalf("Error parsing filters: %v", err)
-	}
-	filters.IPv4 = ipv4
-	filters.IPv6 = ipv6
-
-	// apply shortcut flags
-	if lsTCP && !lsUDP {
-		filters.Proto = "tcp"
-	} else if lsUDP && !lsTCP {
-		filters.Proto = "udp"
-	}
-	if lsListen && !lsEstab {
-		filters.State = "LISTEN"
-	} else if lsEstab && !lsListen {
-		filters.State = "ESTABLISHED"
-	}
-
-	connections, err := collector.GetConnections()
+	rt, err := NewRuntime(args, colorMode, numeric)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	filteredConnections := collector.FilterConnections(connections, filters)
-
+	// apply sorting
 	if sortBy != "" {
-		collector.SortConnections(filteredConnections, collector.ParseSortOptions(sortBy))
+		rt.SortConnections(collector.ParseSortOptions(sortBy))
 	} else {
-		// default sort by local port
-		collector.SortConnections(filteredConnections, collector.SortOptions{
+		rt.SortConnections(collector.SortOptions{
 			Field:     collector.SortByLport,
 			Direction: collector.SortAsc,
 		})
@@ -99,93 +71,26 @@ func runListCommand(outputFormat string, args []string) {
 		selectedFields = strings.Split(fields, ",")
 	}
 
-	switch outputFormat {
+	renderList(rt.Connections, outputFormat, selectedFields)
+}
+
+func renderList(connections []collector.Connection, format string, selectedFields []string) {
+	switch format {
 	case "json":
-		printJSON(filteredConnections)
+		printJSON(connections)
 	case "csv":
-		printCSV(filteredConnections, !noHeaders, showTimestamp, selectedFields)
+		printCSV(connections, !noHeaders, showTimestamp, selectedFields)
 	case "table", "wide":
 		if plainOutput {
-			printPlainTable(filteredConnections, !noHeaders, showTimestamp, selectedFields)
+			printPlainTable(connections, !noHeaders, showTimestamp, selectedFields)
 		} else {
-			printStyledTable(filteredConnections, !noHeaders, selectedFields)
+			printStyledTable(connections, !noHeaders, selectedFields)
 		}
 	default:
-		log.Fatalf("Invalid output format: %s. Valid formats are: table, wide, json, csv", outputFormat)
+		log.Fatalf("Invalid output format: %s. Valid formats are: table, wide, json, csv", format)
 	}
 }
 
-func parseFilters(args []string) (collector.FilterOptions, error) {
-	filters := collector.FilterOptions{}
-	for _, arg := range args {
-		parts := strings.SplitN(arg, "=", 2)
-		if len(parts) != 2 {
-			return filters, fmt.Errorf("invalid filter format: %s", arg)
-		}
-		key, value := parts[0], parts[1]
-		switch strings.ToLower(key) {
-		case "proto":
-			filters.Proto = value
-		case "state":
-			filters.State = value
-		case "pid":
-			pid, err := strconv.Atoi(value)
-			if err != nil {
-				return filters, fmt.Errorf("invalid pid value: %s", value)
-			}
-			filters.Pid = pid
-		case "proc":
-			filters.Proc = value
-		case "lport":
-			port, err := strconv.Atoi(value)
-			if err != nil {
-				return filters, fmt.Errorf("invalid lport value: %s", value)
-			}
-			filters.Lport = port
-		case "rport":
-			port, err := strconv.Atoi(value)
-			if err != nil {
-				return filters, fmt.Errorf("invalid rport value: %s", value)
-			}
-			filters.Rport = port
-		case "user":
-			uid, err := strconv.Atoi(value)
-			if err == nil {
-				filters.UID = uid
-			} else {
-				filters.User = value
-			}
-		case "laddr":
-			filters.Laddr = value
-		case "raddr":
-			filters.Raddr = value
-		case "contains":
-			filters.Contains = value
-		case "if", "interface":
-			filters.Interface = value
-		case "mark":
-			filters.Mark = value
-		case "namespace":
-			filters.Namespace = value
-		case "inode":
-			inode, err := strconv.ParseInt(value, 10, 64)
-			if err != nil {
-				return filters, fmt.Errorf("invalid inode value: %s", value)
-			}
-			filters.Inode = inode
-		case "since":
-			since, sinceRel, err := collector.ParseTimeFilter(value)
-			if err != nil {
-				return filters, fmt.Errorf("invalid since value: %s", value)
-			}
-			filters.Since = since
-			filters.SinceRel = sinceRel
-		default:
-			return filters, fmt.Errorf("unknown filter key: %s", key)
-		}
-	}
-	return filters, nil
-}
 
 func getFieldMap(c collector.Connection) map[string]string {
 	laddr := c.Laddr
@@ -483,20 +388,16 @@ func init() {
 
 	cfg := config.Get()
 
+	// ls-specific flags
 	lsCmd.Flags().StringVarP(&outputFormat, "output", "o", cfg.Defaults.OutputFormat, "Output format (table, wide, json, csv)")
 	lsCmd.Flags().BoolVar(&noHeaders, "no-headers", cfg.Defaults.NoHeaders, "Omit headers for table/csv output")
 	lsCmd.Flags().BoolVar(&showTimestamp, "ts", false, "Include timestamp in output")
 	lsCmd.Flags().StringVarP(&sortBy, "sort", "s", cfg.Defaults.SortBy, "Sort by column (e.g., pid:desc)")
 	lsCmd.Flags().StringVarP(&fields, "fields", "f", strings.Join(cfg.Defaults.Fields, ","), "Comma-separated list of fields to show")
-	lsCmd.Flags().BoolVarP(&ipv4, "ipv4", "4", cfg.Defaults.IPv4, "Only show IPv4 connections")
-	lsCmd.Flags().BoolVarP(&ipv6, "ipv6", "6", cfg.Defaults.IPv6, "Only show IPv6 connections")
 	lsCmd.Flags().StringVar(&colorMode, "color", cfg.Defaults.Color, "Color mode (auto, always, never)")
 	lsCmd.Flags().BoolVarP(&numeric, "numeric", "n", cfg.Defaults.Numeric, "Don't resolve hostnames")
-
-	// shortcut filters
-	lsCmd.Flags().BoolVarP(&lsTCP, "tcp", "t", false, "Show only TCP connections")
-	lsCmd.Flags().BoolVarP(&lsUDP, "udp", "u", false, "Show only UDP connections")
-	lsCmd.Flags().BoolVarP(&lsListen, "listen", "l", false, "Show only listening sockets")
-	lsCmd.Flags().BoolVarP(&lsEstab, "established", "e", false, "Show only established connections")
 	lsCmd.Flags().BoolVarP(&plainOutput, "plain", "p", false, "Plain output (parsable, no styling)")
+
+	// shared filter flags
+	addFilterFlags(lsCmd)
 }

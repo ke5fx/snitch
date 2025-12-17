@@ -39,15 +39,12 @@ type InterfaceStats struct {
 	Count     int    `json:"count"`
 }
 
+// stats-specific flags
 var (
 	statsOutputFormat string
 	statsInterval     time.Duration
 	statsCount        int
 	statsNoHeaders    bool
-	statsTCP          bool
-	statsUDP          bool
-	statsListen       bool
-	statsEstab        bool
 )
 
 var statsCmd = &cobra.Command{
@@ -67,23 +64,9 @@ Available filters:
 }
 
 func runStatsCommand(args []string) {
-	filters, err := parseFilters(args)
+	filters, err := BuildFilters(args)
 	if err != nil {
 		log.Fatalf("Error parsing filters: %v", err)
-	}
-	filters.IPv4 = ipv4
-	filters.IPv6 = ipv6
-
-	// apply shortcut flags
-	if statsTCP && !statsUDP {
-		filters.Proto = "tcp"
-	} else if statsUDP && !statsTCP {
-		filters.Proto = "udp"
-	}
-	if statsListen && !statsEstab {
-		filters.State = "LISTEN"
-	} else if statsEstab && !statsListen {
-		filters.State = "ESTABLISHED"
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -137,12 +120,10 @@ func runStatsCommand(args []string) {
 }
 
 func generateStats(filters collector.FilterOptions) (*StatsData, error) {
-	connections, err := collector.GetConnections()
+	filteredConnections, err := FetchConnections(filters)
 	if err != nil {
 		return nil, err
 	}
-
-	filteredConnections := collector.FilterConnections(connections, filters)
 
 	stats := &StatsData{
 		Timestamp: time.Now(),
@@ -307,16 +288,13 @@ func printStatsTable(stats *StatsData, headers bool) {
 
 func init() {
 	rootCmd.AddCommand(statsCmd)
+
+	// stats-specific flags
 	statsCmd.Flags().StringVarP(&statsOutputFormat, "output", "o", "table", "Output format (table, json, csv)")
 	statsCmd.Flags().DurationVarP(&statsInterval, "interval", "i", 0, "Refresh interval (0 = one-shot)")
 	statsCmd.Flags().IntVarP(&statsCount, "count", "c", 0, "Number of iterations (0 = unlimited)")
 	statsCmd.Flags().BoolVar(&statsNoHeaders, "no-headers", false, "Omit headers for table/csv output")
-	statsCmd.Flags().BoolVarP(&ipv4, "ipv4", "4", false, "Only show IPv4 connections")
-	statsCmd.Flags().BoolVarP(&ipv6, "ipv6", "6", false, "Only show IPv6 connections")
 
-	// shortcut filters
-	statsCmd.Flags().BoolVarP(&statsTCP, "tcp", "t", false, "Show only TCP connections")
-	statsCmd.Flags().BoolVarP(&statsUDP, "udp", "u", false, "Show only UDP connections")
-	statsCmd.Flags().BoolVarP(&statsListen, "listen", "l", false, "Show only listening sockets")
-	statsCmd.Flags().BoolVarP(&statsEstab, "established", "e", false, "Show only established connections")
+	// shared filter flags
+	addFilterFlags(statsCmd)
 }

@@ -47,12 +47,10 @@ Available filters:
 }
 
 func runTraceCommand(args []string) {
-	filters, err := parseFilters(args)
+	filters, err := BuildFilters(args)
 	if err != nil {
 		log.Fatalf("Error parsing filters: %v", err)
 	}
-	filters.IPv4 = ipv4
-	filters.IPv6 = ipv6
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -222,11 +220,14 @@ func printTraceEventHuman(event TraceEvent) {
 
 func init() {
 	rootCmd.AddCommand(traceCmd)
+
+	// trace-specific flags
 	traceCmd.Flags().DurationVarP(&traceInterval, "interval", "i", time.Second, "Polling interval (e.g., 500ms, 2s)")
 	traceCmd.Flags().IntVarP(&traceCount, "count", "c", 0, "Number of events to capture (0 = unlimited)")
 	traceCmd.Flags().StringVarP(&traceOutputFormat, "output", "o", "human", "Output format (human, json)")
 	traceCmd.Flags().BoolVarP(&traceNumeric, "numeric", "n", false, "Don't resolve hostnames")
 	traceCmd.Flags().BoolVar(&traceTimestamp, "ts", false, "Include timestamp in output")
-	traceCmd.Flags().BoolVarP(&ipv4, "ipv4", "4", false, "Only trace IPv4 connections")
-	traceCmd.Flags().BoolVarP(&ipv6, "ipv6", "6", false, "Only trace IPv6 connections")
+
+	// shared filter flags
+	addFilterFlags(traceCmd)
 }

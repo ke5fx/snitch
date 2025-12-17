@@ -40,12 +40,11 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.config/snitch/snitch.toml)")
 	rootCmd.PersistentFlags().Bool("debug", false, "enable debug logs to stderr")
 
-	// add top's filter flags to root so `snitch -l` works
+	// add top's flags to root so `snitch -l` works (defaults to top command)
 	cfg := config.Get()
 	rootCmd.Flags().StringVar(&topTheme, "theme", cfg.Defaults.Theme, "Theme for TUI (dark, light, mono, auto)")
 	rootCmd.Flags().DurationVarP(&topInterval, "interval", "i", 0, "Refresh interval (default 1s)")
-	rootCmd.Flags().BoolVarP(&topTCP, "tcp", "t", false, "Show only TCP connections")
-	rootCmd.Flags().BoolVarP(&topUDP, "udp", "u", false, "Show only UDP connections")
-	rootCmd.Flags().BoolVarP(&topListen, "listen", "l", false, "Show only listening sockets")
-	rootCmd.Flags().BoolVarP(&topEstab, "established", "e", false, "Show only established connections")
+
+	// shared filter flags for root command
+	addFilterFlags(rootCmd)
 }

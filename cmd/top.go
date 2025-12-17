@@ -10,13 +10,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// top-specific flags
 var (
 	topTheme    string
 	topInterval time.Duration
-	topTCP      bool
-	topUDP      bool
-	topListen   bool
-	topEstab    bool
 )
 
 var topCmd = &cobra.Command{
@@ -36,11 +33,11 @@ var topCmd = &cobra.Command{
 		}
 
 		// if any filter flag is set, use exclusive mode
-		if topTCP || topUDP || topListen || topEstab {
-			opts.TCP = topTCP
-			opts.UDP = topUDP
-			opts.Listening = topListen
-			opts.Established = topEstab
+		if filterTCP || filterUDP || filterListen || filterEstab {
+			opts.TCP = filterTCP
+			opts.UDP = filterUDP
+			opts.Listening = filterListen
+			opts.Established = filterEstab
 			opts.Other = false
 			opts.FilterSet = true
 		}
@@ -57,10 +54,11 @@ var topCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(topCmd)
 	cfg := config.Get()
+
+	// top-specific flags
 	topCmd.Flags().StringVar(&topTheme, "theme", cfg.Defaults.Theme, "Theme for TUI (dark, light, mono, auto)")
 	topCmd.Flags().DurationVarP(&topInterval, "interval", "i", time.Second, "Refresh interval")
-	topCmd.Flags().BoolVarP(&topTCP, "tcp", "t", false, "Show only TCP connections")
-	topCmd.Flags().BoolVarP(&topUDP, "udp", "u", false, "Show only UDP connections")
-	topCmd.Flags().BoolVarP(&topListen, "listen", "l", false, "Show only listening sockets")
-	topCmd.Flags().BoolVarP(&topEstab, "established", "e", false, "Show only established connections")
+
+	// shared filter flags
+	addFilterFlags(topCmd)
 }
