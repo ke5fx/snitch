@@ -38,6 +38,18 @@ yay -S snitch-bin
 paru -S snitch-bin
 ```
 
+### shell script
+
+```bash
+curl -sSL https://raw.githubusercontent.com/karol-broda/snitch/master/install.sh | sh
+```
+
+installs to `~/.local/bin` if available, otherwise `/usr/local/bin`. override with:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/karol-broda/snitch/master/install.sh | INSTALL_DIR=~/bin sh
+```
+
 ### binary
 
 download from [releases](https://github.com/karol-broda/snitch/releases):
@@ -51,6 +63,7 @@ sudo mv snitch /usr/local/bin/
 ```
 
 > **macos:** if blocked with "cannot be opened because the developer cannot be verified", run:
+>
 > ```bash
 > xattr -d com.apple.quarantine /usr/local/bin/snitch
 > ```
