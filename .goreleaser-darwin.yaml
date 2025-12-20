@@ -25,6 +25,9 @@ archives:
       {{- .Version }}_
       {{- .Os }}_
       {{- .Arch }}
+    files:
+      - LICENSE
+      - README.md
 
 release:
   github:

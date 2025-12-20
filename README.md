@@ -28,6 +28,16 @@ nix profile install github:karol-broda/snitch
 # then use: inputs.snitch.packages.${system}.default
 ```
 
+### arch linux (aur)
+
+```bash
+# with yay
+yay -S snitch-bin
+
+# with paru
+paru -S snitch-bin
+```
+
 ### binary
 
 download from [releases](https://github.com/karol-broda/snitch/releases):
