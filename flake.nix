@@ -46,7 +46,8 @@
 
       mkSnitch = pkgs:
         let
-          version = self.shortRev or self.dirtyShortRev or "dev";
+          rev = self.shortRev or self.dirtyShortRev or "unknown";
+          version = "nix-${rev}";
           go = mkGo125 pkgs;
           buildGoModule = pkgs.buildGoModule.override { inherit go; };
         in
@@ -61,7 +62,7 @@
             "-s"
             "-w"
             "-X snitch/cmd.Version=${version}"
-            "-X snitch/cmd.Commit=${version}"
+            "-X snitch/cmd.Commit=${rev}"
             "-X snitch/cmd.Date=${self.lastModifiedDate or "unknown"}"
           ];
           meta = {

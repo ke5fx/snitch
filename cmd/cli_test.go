@@ -71,7 +71,7 @@ func TestCLIContract(t *testing.T) {
 			name:           "version",
 			args:           []string{"version"},
 			expectExitCode: 0,
-			expectStdout:   []string{"snitch", "commit:", "built:"},
+			expectStdout:   []string{"snitch", "commit", "built"},
 			expectStderr:   nil,
 			description:    "version command should show version information",
 		},

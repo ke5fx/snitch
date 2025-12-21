@@ -15,6 +15,7 @@ const (
 	SymbolArrowDown  = string('\u2193') // downwards arrow
 	SymbolRefresh    = string('\u21BB') // clockwise open circle arrow
 	SymbolEllipsis   = string('\u2026') // horizontal ellipsis
+	SymbolDownload   = string('\u21E9') // downwards white arrow
 
 	// box drawing rounded 
 	BoxTopLeft     = string('\u256D') // light arc down and right
