@@ -6,6 +6,7 @@ BINARY_NAME="snitch"
 
 # allow override via environment
 INSTALL_DIR="${INSTALL_DIR:-}"
+KEEP_QUARANTINE="${KEEP_QUARANTINE:-}"
 
 detect_install_dir() {
     if [ -n "$INSTALL_DIR" ]; then
@@ -86,9 +87,11 @@ main() {
         exit 1
     fi
 
-    # remove macos quarantine attribute
-    if [ "$os" = "darwin" ]; then
-        xattr -d com.apple.quarantine "${tmp_dir}/${BINARY_NAME}" 2>/dev/null || true
+    # remove macos quarantine attribute unless disabled
+    if [ "$os" = "darwin" ] && [ -z "$KEEP_QUARANTINE" ]; then
+        if xattr -d com.apple.quarantine "${tmp_dir}/${BINARY_NAME}" 2>/dev/null; then
+            echo "warning: removed macOS quarantine attribute from binary"
+        fi
     fi
 
     # install binary

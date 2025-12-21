@@ -50,6 +50,8 @@ installs to `~/.local/bin` if available, otherwise `/usr/local/bin`. override wi
 curl -sSL https://raw.githubusercontent.com/karol-broda/snitch/master/install.sh | INSTALL_DIR=~/bin sh
 ```
 
+> **macos:** the install script automatically removes the quarantine attribute (`com.apple.quarantine`) from the binary to allow it to run without gatekeeper warnings. to disable this, set `KEEP_QUARANTINE=1`.
+
 ### binary
 
 download from [releases](https://github.com/karol-broda/snitch/releases):
@@ -142,6 +144,16 @@ stream json frames at an interval.
 ```bash
 snitch watch -i 1s | jq '.count'
 snitch watch -l -i 500ms
+```
+
+### `snitch upgrade`
+
+check for updates and upgrade in-place.
+
+```bash
+snitch upgrade              # check for updates
+snitch upgrade --yes        # upgrade automatically
+snitch upgrade -v 0.1.7     # install specific version
 ```
 
 ## filters

@@ -10,8 +10,10 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 
+	"github.com/fatih/color"
 	"github.com/spf13/cobra"
 )
 
@@ -19,21 +21,27 @@ const (
 	repoOwner = "karol-broda"
 	repoName  = "snitch"
 	githubAPI = "https://api.github.com"
+	firstUpgradeVersion = "0.1.8"
 )
 
-var upgradeYes bool
+var (
+	upgradeYes     bool
+	upgradeVersion string
+)
 
 var upgradeCmd = &cobra.Command{
 	Use:   "upgrade",
 	Short: "Check for updates and optionally upgrade snitch",
 	Long: `Check for available updates and show upgrade instructions.
 
-Use --yes to perform an in-place upgrade automatically.`,
+Use --yes to perform an in-place upgrade automatically.
+Use --version to install a specific version.`,
 	RunE: runUpgrade,
 }
 
 func init() {
 	upgradeCmd.Flags().BoolVarP(&upgradeYes, "yes", "y", false, "Perform the upgrade automatically")
+	upgradeCmd.Flags().StringVarP(&upgradeVersion, "version", "v", "", "Install a specific version (e.g., v0.1.7)")
 	rootCmd.AddCommand(upgradeCmd)
 }
 
@@ -44,6 +52,11 @@ type githubRelease struct {
 
 func runUpgrade(cmd *cobra.Command, args []string) error {
 	current := Version
+
+	if upgradeVersion != "" {
+		return handleSpecificVersion(current, upgradeVersion)
+	}
+
 	latest, err := fetchLatestVersion()
 	if err != nil {
 		return fmt.Errorf("failed to check for updates: %w", err)
@@ -52,33 +65,111 @@ func runUpgrade(cmd *cobra.Command, args []string) error {
 	currentClean := strings.TrimPrefix(current, "v")
 	latestClean := strings.TrimPrefix(latest, "v")
 
-	fmt.Printf("current: %s\n", current)
-	fmt.Printf("latest:  %s\n", latest)
-	fmt.Println()
+	printVersionComparison(current, latest)
 
 	if currentClean == latestClean {
-		fmt.Println("you are running the latest version")
+		green := color.New(color.FgGreen)
+		green.Println("✓ you are running the latest version")
 		return nil
 	}
 
 	if current == "dev" {
-		fmt.Println("you are running a development build")
+		yellow := color.New(color.FgYellow)
+		yellow.Println("⚠ you are running a development build")
+		fmt.Println()
 		fmt.Println("use one of the methods below to install a release version:")
+		fmt.Println()
 		printUpgradeInstructions()
 		return nil
 	}
 
-	fmt.Printf("update available: %s -> %s\n", current, latest)
+	green := color.New(color.FgGreen, color.Bold)
+	green.Printf("✓ update available: %s → %s\n", current, latest)
 	fmt.Println()
 
 	if !upgradeYes {
 		printUpgradeInstructions()
 		fmt.Println()
-		fmt.Println("or run 'snitch upgrade --yes' to upgrade in-place")
+		faint := color.New(color.Faint)
+		cmdStyle := color.New(color.FgCyan)
+		faint.Print("  in-place      ")
+		cmdStyle.Println("snitch upgrade --yes")
 		return nil
 	}
 
 	return performUpgrade(latest)
+}
+
+func handleSpecificVersion(current, target string) error {
+	if !strings.HasPrefix(target, "v") {
+		target = "v" + target
+	}
+	targetClean := strings.TrimPrefix(target, "v")
+
+	printVersionComparisonTarget(current, target)
+
+	if isVersionLower(targetClean, firstUpgradeVersion) {
+		yellow := color.New(color.FgYellow)
+		yellow.Printf("⚠ warning: the upgrade command was introduced in v%s\n", firstUpgradeVersion)
+		faint := color.New(color.Faint)
+		faint.Printf("  version %s does not include this command\n", target)
+		faint.Println("  you will need to use other methods to upgrade from that version")
+		fmt.Println()
+	}
+
+	currentClean := strings.TrimPrefix(current, "v")
+	if currentClean == targetClean {
+		green := color.New(color.FgGreen)
+		green.Println("✓ you are already running this version")
+		return nil
+	}
+
+	if !upgradeYes {
+		faint := color.New(color.Faint)
+		cmdStyle := color.New(color.FgCyan)
+		if isVersionLower(targetClean, currentClean) {
+			yellow := color.New(color.FgYellow)
+			yellow.Printf("↓ this will downgrade from %s to %s\n", current, target)
+		} else {
+			green := color.New(color.FgGreen)
+			green.Printf("↑ this will upgrade from %s to %s\n", current, target)
+		}
+		fmt.Println()
+		faint.Print("run ")
+		cmdStyle.Printf("snitch upgrade --version %s --yes", target)
+		faint.Println(" to proceed")
+		return nil
+	}
+
+	return performUpgrade(target)
+}
+
+func isVersionLower(v1, v2 string) bool {
+	parts1 := parseVersion(v1)
+	parts2 := parseVersion(v2)
+
+	for i := 0; i < 3; i++ {
+		if parts1[i] < parts2[i] {
+			return true
+		}
+		if parts1[i] > parts2[i] {
+			return false
+		}
+	}
+	return false
+}
+
+func parseVersion(v string) [3]int {
+	var parts [3]int
+	segments := strings.Split(v, ".")
+
+	for i := 0; i < len(segments) && i < 3; i++ {
+		n, err := strconv.Atoi(segments[i])
+		if err == nil {
+			parts[i] = n
+		}
+	}
+	return parts
 }
 
 func fetchLatestVersion() (string, error) {
@@ -106,20 +197,47 @@ func fetchLatestVersion() (string, error) {
 	return release.TagName, nil
 }
 
+func printVersionComparison(current, latest string) {
+	faint := color.New(color.Faint)
+	version := color.New(color.FgCyan)
+
+	faint.Print("current  ")
+	version.Println(current)
+	faint.Print("latest   ")
+	version.Println(latest)
+	fmt.Println()
+}
+
+func printVersionComparisonTarget(current, target string) {
+	faint := color.New(color.Faint)
+	version := color.New(color.FgCyan)
+
+	faint.Print("current  ")
+	version.Println(current)
+	faint.Print("target   ")
+	version.Println(target)
+	fmt.Println()
+}
+
 func printUpgradeInstructions() {
-	fmt.Println("upgrade options:")
+	bold := color.New(color.Bold)
+	faint := color.New(color.Faint)
+	cmd := color.New(color.FgCyan)
+
+	bold.Println("upgrade options:")
 	fmt.Println()
-	fmt.Println("  go install:")
-	fmt.Printf("    go install github.com/%s/%s@latest\n", repoOwner, repoName)
-	fmt.Println()
-	fmt.Println("  shell script:")
-	fmt.Printf("    curl -sSL https://raw.githubusercontent.com/%s/%s/master/install.sh | sh\n", repoOwner, repoName)
-	fmt.Println()
-	fmt.Println("  arch linux (aur):")
-	fmt.Println("    yay -S snitch-bin")
-	fmt.Println()
-	fmt.Println("  nix:")
-	fmt.Printf("    nix profile upgrade --inputs-from github:%s/%s\n", repoOwner, repoName)
+
+	faint.Print("  go install    ")
+	cmd.Printf("go install github.com/%s/%s@latest\n", repoOwner, repoName)
+
+	faint.Print("  shell script  ")
+	cmd.Printf("curl -sSL https://raw.githubusercontent.com/%s/%s/master/install.sh | sh\n", repoOwner, repoName)
+
+	faint.Print("  arch (aur)    ")
+	cmd.Println("yay -S snitch-bin")
+
+	faint.Print("  nix           ")
+	cmd.Printf("nix profile upgrade --inputs-from github:%s/%s\n", repoOwner, repoName)
 }
 
 func performUpgrade(version string) error {
@@ -141,7 +259,11 @@ func performUpgrade(version string) error {
 	downloadURL := fmt.Sprintf("https://github.com/%s/%s/releases/download/%s/%s",
 		repoOwner, repoName, version, archiveName)
 
-	fmt.Printf("downloading %s...\n", archiveName)
+	faint := color.New(color.Faint)
+	cyan := color.New(color.FgCyan)
+	faint.Print("↓ downloading ")
+	cyan.Printf("%s", archiveName)
+	faint.Println("...")
 
 	resp, err := http.Get(downloadURL)
 	if err != nil {
@@ -167,13 +289,17 @@ func performUpgrade(version string) error {
 	// check if we can write to the target location
 	targetDir := filepath.Dir(execPath)
 	if !isWritable(targetDir) {
-		fmt.Printf("elevated permissions required to install to %s\n", targetDir)
+		yellow := color.New(color.FgYellow)
+		cmdStyle := color.New(color.FgCyan)
+
+		yellow.Printf("⚠ elevated permissions required to install to %s\n", targetDir)
 		fmt.Println()
-		fmt.Println("run with sudo or install to a user-writable location:")
-		fmt.Printf("  sudo snitch upgrade --yes\n")
+		faint.Println("run with sudo or install to a user-writable location:")
 		fmt.Println()
-		fmt.Println("or use the install script with a custom directory:")
-		fmt.Printf("  curl -sSL https://raw.githubusercontent.com/%s/%s/master/install.sh | INSTALL_DIR=~/.local/bin sh\n",
+		faint.Print("  sudo         ")
+		cmdStyle.Println("sudo snitch upgrade --yes")
+		faint.Print("  custom dir   ")
+		cmdStyle.Printf("curl -sSL https://raw.githubusercontent.com/%s/%s/master/install.sh | INSTALL_DIR=~/.local/bin sh\n",
 			repoOwner, repoName)
 		return nil
 	}
@@ -198,10 +324,12 @@ func performUpgrade(version string) error {
 
 	if err := os.Remove(backupPath); err != nil {
 		// non-fatal, just warn
-		fmt.Fprintf(os.Stderr, "warning: failed to remove backup file %s: %v\n", backupPath, err)
+		yellow := color.New(color.FgYellow)
+		yellow.Fprintf(os.Stderr, "⚠ warning: failed to remove backup file %s: %v\n", backupPath, err)
 	}
 
-	fmt.Printf("successfully upgraded to %s\n", version)
+	green := color.New(color.FgGreen, color.Bold)
+	green.Printf("✓ successfully upgraded to %s\n", version)
 	return nil
 }
 
