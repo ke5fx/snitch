@@ -47,37 +47,14 @@ func (m model) renderTitle() string {
 func (m model) renderFilters() string {
 	var parts []string
 
-	if m.showTCP {
-		parts = append(parts, m.theme.Styles.Success.Render("tcp"))
-	} else {
-		parts = append(parts, m.theme.Styles.Normal.Render("tcp"))
-	}
-
-	if m.showUDP {
-		parts = append(parts, m.theme.Styles.Success.Render("udp"))
-	} else {
-		parts = append(parts, m.theme.Styles.Normal.Render("udp"))
-	}
+	parts = append(parts, m.renderFilterLabel("t", "cp", m.showTCP))
+	parts = append(parts, m.renderFilterLabel("u", "dp", m.showUDP))
 
 	parts = append(parts, m.theme.Styles.Border.Render(BoxVertical))
 
-	if m.showListening {
-		parts = append(parts, m.theme.Styles.Success.Render("listen"))
-	} else {
-		parts = append(parts, m.theme.Styles.Normal.Render("listen"))
-	}
-
-	if m.showEstablished {
-		parts = append(parts, m.theme.Styles.Success.Render("estab"))
-	} else {
-		parts = append(parts, m.theme.Styles.Normal.Render("estab"))
-	}
-
-	if m.showOther {
-		parts = append(parts, m.theme.Styles.Success.Render("other"))
-	} else {
-		parts = append(parts, m.theme.Styles.Normal.Render("other"))
-	}
+	parts = append(parts, m.renderFilterLabel("l", "isten", m.showListening))
+	parts = append(parts, m.renderFilterLabel("e", "stab", m.showEstablished))
+	parts = append(parts, m.renderFilterLabel("o", "ther", m.showOther))
 
 	left := "  " + strings.Join(parts, "  ")
 
@@ -119,6 +96,18 @@ func (m model) renderTableHeader() string {
 	return m.theme.Styles.Header.Render(header) + "\n"
 }
 
+func (m model) renderFilterLabel(firstChar, rest string, active bool) string {
+	baseStyle := m.theme.Styles.Normal
+	if active {
+		baseStyle = m.theme.Styles.Success
+	}
+
+	underlinedFirst := baseStyle.Underline(true).Render(firstChar)
+	restPart := baseStyle.Render(rest)
+
+	return underlinedFirst + restPart
+}
+
 func (m model) renderSeparator() string {
 	w := m.width - 4
 	if w < 1 {
@@ -134,8 +123,11 @@ func (m model) renderConnections() string {
 	pageSize := m.pageSize()
 
 	if len(visible) == 0 {
-		empty := "\n  " + m.theme.Styles.Normal.Render("no connections match filters") + "\n"
-		return empty
+		b.WriteString("  " + m.theme.Styles.Normal.Render("no connections match filters") + "\n")
+		for i := 1; i < pageSize; i++ {
+			b.WriteString("\n")
+		}
+		return b.String()
 	}
 
 	start := m.scrollOffset(pageSize, len(visible))
