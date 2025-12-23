@@ -1,2 +1,0 @@
-[32;1mPID   PROCESS    USER        PROTO          STATE                  LADDR       LPORT   RADDR       RPORT[0;22m
-1234         test-app   test-user   [36mtcp[0m   [32mESTABLISHED[0m   localhost   8080    localhost   9090
