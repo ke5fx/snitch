@@ -49,3 +49,6 @@ snitch.exe ls [options]
 - `-U`, `--unique`: List each process executable only once.
 - `-f`, `--full-path`: Show full process executable path.
 - `-h`, `--help`: Show help.
+
+![Example Screenshot](example.png)
+
