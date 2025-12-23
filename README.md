@@ -1,4 +1,4 @@
-# snitch-win
+# snitch
 
 A friendlier `netstat` for humans, ported to Windows in Visual C++.
 
@@ -22,7 +22,7 @@ build.bat
 ## Usage
 ### Interactive Mode (Default)
 ```batch
-snitch.exe
+snitch.exe [options]
 ```
 **Keybindings in TUI:**
 - `q`: Quit
